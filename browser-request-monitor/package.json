@@ -1,0 +1,15 @@
+{
+  "name": "browser-request-monitor",
+  "version": "1.0.0",
+  "description": "tracking web request",
+  "main": "index.js",
+  "dependencies": {
+    "puppeteer": "^10.0.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Yuan-Yi Chang",
+  "license": "MIT"
+}
