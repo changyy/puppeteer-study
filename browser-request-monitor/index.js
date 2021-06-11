@@ -108,10 +108,41 @@ function watchRequest(page_url, request_url) {
 	}
 }
 
-function watchTags(tags) {
-	for (var i=0,cnt=tags.length ; i<cnt ; ++i) {
+async function watchTags(page, watchTags) {
+	const static_html_content = await page.content();
+	const dynamic_body_content = await page.$eval('body', (element) => { return element.innerHTML });
+	const target_url = page.url();
 
+	let output_tags = [];
+	for (var i=0, cnt=watch_tags.length ; i<cnt ; ++i) {
+		const tag_name = watch_tags[i];
+		const elementHandles = await page.$$( tag_name );
+		if (watch_tags_property[tag_name]) {
+			for (var j=0 ; j<watch_tags_property[tag_name].length ; ++j) {
+				const property_name = watch_tags_property[tag_name][j];
+				const propertyJsHandles = await Promise.all(
+					elementHandles.map(handle => handle.getProperty(property_name))
+				);
+				const values = await Promise.all(
+					propertyJsHandles.map(handle => handle.jsonValue())
+				);
+				if (!output_tags[tag_name]) {
+					output_tags[tag_name] = [];
+					for (var k=0; k<values.length ; ++k) {
+						output_tags[tag_name].push({});
+					}
+				}
+				for (var k=0; k<values.length ; ++k) {
+					output_tags[tag_name][k][property_name] = values[k];
+				}
+			}
+		}
+		console.log('[WATCH][TAG] '+tag_name+': '+watch_tags_property[tag_name]);
+		console.log('Web URL: ['+target_url+']');
+		console.log(output_tags[tag_name]);
 	}
+	//console.log('[INFO] output_tags: ');
+	//console.log(output_tags);
 }
 
 (async () => {
@@ -122,6 +153,33 @@ function watchTags(tags) {
 	await page.emulate(device);
 	await page.setRequestInterception(true);
 
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-domcontentloaded
+	// https://developer.mozilla.org/en-US/docs/Web/API/Window/DOMContentLoaded_event
+	//
+	// The DOMContentLoaded event fires when the initial HTML document has been completely loaded and parsed, without waiting for stylesheets, images, and subframes to finish loading.
+	//
+	page.on('domcontentloaded', () => {
+		console.log('on.domcontentloaded');
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-domcontentloaded
+	// https://developer.mozilla.org/en-US/docs/Web/API/Window/load_event
+	//
+	// The load event is fired when the whole page has loaded, including all dependent resources such as stylesheets and images. This is in contrast to DOMContentLoaded, which is fired as soon as the page DOM has been loaded, without waiting for resources to finish loading.
+	//
+	page.on('load', async () => {
+		console.log('on.load');
+		watchTags(page, watch_tags);
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-framenavigated
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-frame
+	page.on('framenavigated', frame => {
+		console.log('on.framenavigated: '+frame.url());
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-request
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-httprequest
 	page.on('request', request => {
 		watchRequest(page.url(), request.url());
 		if (skip_resource_type[ request.resourceType() ])
@@ -130,46 +188,19 @@ function watchTags(tags) {
 			request.continue();
 	});
 
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-response
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-httpresponse
+	page.on('response', response => {
+		//console.log('on.response: '+response.url());
+	});
+
 	while (true) {
 		if (url_init.length > 0) {
 			const target_url = url_init.shift();
 			await page.goto(target_url, {
 				waitUntil: 'networkidle0',
 			});
-
-			const static_html_content = await page.content();
-			const dynamic_body_content = await page.$eval('body', (element) => { return element.innerHTML });
-
-			let output_tags = [];
-			for (var i=0, cnt=watch_tags.length ; i<cnt ; ++i) {
-				const tag_name = watch_tags[i];
-				const elementHandles = await page.$$( tag_name );
-				if (watch_tags_property[tag_name]) {
-					for (var j=0 ; j<watch_tags_property[tag_name].length ; ++j) {
-						const property_name = watch_tags_property[tag_name][j];
-						const propertyJsHandles = await Promise.all(
-							elementHandles.map(handle => handle.getProperty(property_name))
-						);
-						const values = await Promise.all(
-							propertyJsHandles.map(handle => handle.jsonValue())
-						);
-						if (!output_tags[tag_name]) {
-							output_tags[tag_name] = [];
-							for (var k=0; k<values.length ; ++k) {
-								output_tags[tag_name].push({});
-							}
-						}
-						for (var k=0; k<values.length ; ++k) {
-							output_tags[tag_name][k][property_name] = values[k];
-						}
-					}
-				}
-				console.log('[WATCH][TAG] '+tag_name+': '+watch_tags_property[tag_name]);
-				console.log('Web URL: ['+target_url+']');
-				console.log(output_tags[tag_name]);
-			}
-			//console.log('[INFO] output_tags: ');
-			//console.log(output_tags);
+			console.log('networkidle0');
 		}
 		if (url_init.length > 0)
 			await sleep(5000);
