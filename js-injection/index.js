@@ -1,0 +1,277 @@
+// https://www.npmjs.com/package/puppeteer
+// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-page
+const puppeteer = require('puppeteer');
+// https://devdocs.io/puppeteer/index#puppeteerdevices
+// https://github.com/puppeteer/puppeteer/blob/main/src/common/DeviceDescriptors.ts
+let device = puppeteer.devices['iPhone X'];
+
+let watch_tags = [];
+let watch_tags_property = [];
+let watch_request_keywords = [];
+let skip_resource_type = [];
+let url_init = [];
+let js_resource = [];
+let js_resource_content = [];
+// https://nodejs.org/docs/latest/api/process.html#process_process_argv
+if (process && process.argv) {
+	for (let i=0, cnt=process.argv.length ; i<cnt ; ++i) {
+		switch(process.argv[i]) {
+			case '-tag':
+				if (i+1 < cnt) {
+					const fields = process.argv[++i].split('.');
+					if (!watch_tags.includes(fields[0]))
+						watch_tags.push(fields[0]);
+					if (fields.length == 2) {
+						if (!watch_tags_property[fields[0]])
+							watch_tags_property[fields[0]] = [];
+						if (!watch_tags_property[fields[0]].includes(fields[1]))
+							watch_tags_property[fields[0]].push(fields[1]);
+					}
+				}
+				break;
+			case '-request':
+				if (i+1 < cnt) {
+					const fields = process.argv[++i].split('&&');
+					if (!watch_request_keywords.includes(fields))
+						watch_request_keywords.push(fields);
+				}
+				break;
+			case '-skip-resource-type':
+				if (i+1 < cnt) {
+					const fields = process.argv[++i].split(',');
+					for (let j=0, cnt=fields.length; j<cnt ; ++j) {
+						skip_resource_type[ fields[j] ] = true;
+					}
+				}
+				break;
+			case '-url':
+				if (i+1 < cnt) {
+					url_init.push(process.argv[++i]);
+				}
+				break;
+			case '-js':
+				if (i+1 < cnt) {
+					js_resource.push(process.argv[++i]);
+				}
+				break;
+
+			case '-device':
+				if (i+1 < cnt) {
+					if (puppeteer.devices[ process.argv[i+1] ])
+						device = puppeteer.devices[ process.argv[++i] ]; 
+				}
+				break;
+		}
+	}
+}
+
+if (url_init.length == 0) {
+	const path = require('path');
+	console.log('Usage> '+path.basename(process.argv[0])+' '+path.basename(process.argv[1])+' -device "iPhone 6" -url "https://tw.yahoo.com" -tag "a.href" -tag "script.src" -request "keyword1&&keyword2&&keyword3"');
+	console.log('\t$ '+path.basename(process.argv[0])+' '+path.basename(process.argv[1])+' -url "https://www.google.com.tw" -request ".gif"');
+	console.log('\t$ '+path.basename(process.argv[0])+' '+path.basename(process.argv[1])+' -url "https://www.google.com.tw" -tag "script.src"');
+	console.log();
+	process.exit(0);
+}
+console.log('[INFO] watch tags: ');
+console.log(watch_tags);
+console.log('[INFO] watch tags property: ');
+console.log(watch_tags_property);
+console.log('[INFO] watch request keywords: ');
+console.log(watch_request_keywords);
+console.log('[INFO] skip resource type: ');
+console.log(skip_resource_type);
+console.log('[INFO] URL: ');
+console.log(url_init);
+console.log('[INFO] JS: ');
+console.log(js_resource);
+
+function downloadResource(resource_url) {
+	return new Promise((resolve, reject) => {
+		try {
+			const url = new URL(resource_url);
+			const request = require('request');
+			request.get(url.href, function (error, response, body) {
+				if (error) {
+					reject('request error: '+error);
+				} else if (response.statusCode != 200) {
+					reject('request error, statusCode: '+response.statusCode);
+				} else {
+					resolve(body);
+				}
+			});
+		} catch (e) {
+			try {
+				const fs = require('fs');
+				const data = fs.readFileSync(resource_url).toString();
+				resolve(data);
+			} catch (e) {
+				reject('fs.readFileSync error: '+e);
+			}
+		}
+	});
+}
+
+function sleep(ms) {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+}
+
+function watchRequest(page_url, request_url) {
+	if (watch_request_keywords.length > 0) {
+		for (var i=0, cnt=watch_request_keywords.length; i<cnt ; ++i) {
+			let found = false;
+			if (watch_request_keywords[i].length > 0) {
+				found = watch_request_keywords[i].length > 0;
+				for (var j=0 ; j<watch_request_keywords[i].length ; ++j) {
+					if (request_url.indexOf(watch_request_keywords[i][j]) == -1) {
+						found = false;
+						break;
+					}
+				}
+			}
+			if (found) {
+				console.log('[WATCH][REQUEST] keywords: '+watch_request_keywords[i]);
+				console.log('\n\tWeb URL: ['+page_url+']\n\t\tRequest: ['+request_url+']');
+				const url_info = new URL(request_url);
+				for (const [key, value] of url_info.searchParams) {
+					console.log("\t\t\t["+key+'] = ['+value+']');
+				}
+			}
+		}
+	}
+}
+
+async function watchTags(page, watchTags) {
+	const static_html_content = await page.content();
+	const dynamic_body_content = await page.$eval('body', (element) => { return element.innerHTML });
+	const target_url = page.url();
+
+	let output_tags = [];
+	for (var i=0, cnt=watch_tags.length ; i<cnt ; ++i) {
+		const tag_name = watch_tags[i];
+		const elementHandles = await page.$$( tag_name );
+		if (watch_tags_property[tag_name]) {
+			for (var j=0 ; j<watch_tags_property[tag_name].length ; ++j) {
+				const property_name = watch_tags_property[tag_name][j];
+				const propertyJsHandles = await Promise.all(
+					elementHandles.map(handle => handle.getProperty(property_name))
+				);
+				const values = await Promise.all(
+					propertyJsHandles.map(handle => handle.jsonValue())
+				);
+				if (!output_tags[tag_name]) {
+					output_tags[tag_name] = [];
+					for (var k=0; k<values.length ; ++k) {
+						output_tags[tag_name].push({});
+					}
+				}
+				for (var k=0; k<values.length ; ++k) {
+					output_tags[tag_name][k][property_name] = values[k];
+				}
+			}
+		}
+		console.log('[WATCH][TAG] '+tag_name+': '+watch_tags_property[tag_name]);
+		console.log('Web URL: ['+target_url+']');
+		console.log(output_tags[tag_name]);
+	}
+	//console.log('[INFO] output_tags: ');
+	//console.log(output_tags);
+}
+
+(async () => {
+	const browser = await puppeteer.launch({headless: false});
+	//const page = await browser.newPage();
+	const context = await browser.createIncognitoBrowserContext();
+	const page = await context.newPage();
+	await page.emulate(device);
+	await page.setRequestInterception(true);
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-domcontentloaded
+	// https://developer.mozilla.org/en-US/docs/Web/API/Window/DOMContentLoaded_event
+	//
+	// The DOMContentLoaded event fires when the initial HTML document has been completely loaded and parsed, without waiting for stylesheets, images, and subframes to finish loading.
+	//
+	page.on('domcontentloaded', () => {
+		console.log('on.domcontentloaded');
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-domcontentloaded
+	// https://developer.mozilla.org/en-US/docs/Web/API/Window/load_event
+	//
+	// The load event is fired when the whole page has loaded, including all dependent resources such as stylesheets and images. This is in contrast to DOMContentLoaded, which is fired as soon as the page DOM has been loaded, without waiting for resources to finish loading.
+	//
+	page.on('load', async () => {
+		console.log('on.load');
+		watchTags(page, watch_tags);
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-framenavigated
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-frame
+	page.on('framenavigated', frame => {
+		console.log('on.framenavigated: '+frame.url());
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-request
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-httprequest
+	page.on('request', request => {
+		watchRequest(page.url(), request.url());
+		if (skip_resource_type[ request.resourceType() ])
+			request.abort();
+		else
+			request.continue();
+	});
+
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-event-response
+	// https://pptr.dev/#?product=Puppeteer&version=v10.0.0&show=api-class-httpresponse
+	page.on('response', response => {
+		//console.log('on.response: '+response.url());
+	});
+
+	// download js resource
+	for(let i=0 ; i<js_resource.length ; ++i) {
+		await downloadResource(js_resource[i]).then(function(data) {
+			if (data.length > 0)
+				js_resource_content[js_resource[i]] = data;
+		}, function(error) {
+			console.log('getResource error: '+error);
+			process.exit(1);
+		});
+	}
+
+	while (true) {
+		if (url_init.length > 0) {
+			const target_url = url_init.shift();
+			await page.goto(target_url, {
+				waitUntil: 'networkidle0',
+			});
+			console.log('networkidle0');
+
+			for(let i=0 ; i<js_resource.length ; ++i) {
+				console.log('inject: '+js_resource[i]+', size: '+js_resource_content[i].length);
+				await page.evaluate((js_code) => {return Promise.resolve(window.eval(js_code));}, js_resource_content[i]);
+			}
+			//let result = await page.evaluate(() => { return Promise.resolve(window.js_inject_info); });
+			//console.log('[INFO] js inject: '+result);
+
+			// https://github.com/puppeteer/puppeteer/blob/main/examples/custom-event.js
+			// Define a window._puppeteer_helper function on the page.
+			await page.exposeFunction('_puppeteer_helper', (data) => {
+				console.log(`_puppeteer_helper fired`);
+			});
+
+			let result = await page.evaluate((data_to_page) => {
+				let data = data_to_page;
+				return Promise.resolve(window.eval(`
+					window._puppeteer_helper();
+				`));
+			}, 'nothing');
+		}
+		if (url_init.length > 0)
+			await sleep(5000);
+		else
+			await sleep(50);
+	}
+	await browser.close();
+})();
